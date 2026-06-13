@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@layer base {
+  body {
+    @apply bg-slate-900 text-slate-100 min-h-screen antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}
+
+/* Custom styling for the page rendering of math sheets */
+.paper-preview {
+  font-family: 'Times New Roman', Times, serif;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+}
+
+.paper-preview * {
+  /* Use standard serif font for exam feel if inside paper preview */
+  font-family: 'Times New Roman', Times, serif;
+}
+
+/* Print styling */
+@media print {
+  body {
+    background-color: white !important;
+    color: black !important;
+    min-height: auto !important;
+  }
+  
+  .no-print {
+    display: none !important;
+  }
+  
+  .print-only {
+    display: block !important;
+  }
+
+  .paper-preview {
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    background: white !important;
+    color: black !important;
+  }
+  
+  /* Ensure page breaks are handled gracefully */
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+}
+
+/* Custom styles for mermaid diagrams */
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+/* Smooth transitions */
+.transition-all-300 {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
