@@ -213,3 +213,131 @@ ${q.hasDiagram ? `[Contains a diagram of type ${q.diagramType}]` : ""}
   }
 }
 
+const PRACTICE_SYSTEM_PROMPT = `You are an expert mathematics educator. Your job is to generate high-quality, academic practice question sets with matching step-by-step solutions based on the uploaded PDF textbook materials or study notes.
+
+Follow these strict rules:
+1. LaTeX formatting: Use LaTeX syntax for all math symbols. Inline math MUST be enclosed in single dollar signs $...$ (e.g. $x^2 + y^2 = r^2$, $\\theta = 45^\\circ$). Block equations/formulas MUST be enclosed in double dollar signs $$...$$ (e.g. $$\\int_{0}^{\\pi} \\sin(x) dx = 2$$).
+2. Double-check delimiters: Ensure all LaTeX delimiters are properly closed.
+3. Content Alignment: Read the uploaded PDF text carefully. Extract core topics, notation conventions, and difficulty levels, and generate authentic practice questions.
+4. Set Differentiation: Ensure each practice set has distinct, non-overlapping questions. If there is not enough source material in the PDFs to make all questions completely distinct, you may include some overlapping or minor variations of questions across sets, but maximize variety.
+5. Clean JSON Output: Return a JSON object starting and ending with braces. Do not include conversational filler or code block backticks. The schema must strictly have a single key "practiceSets" containing an array of sets. Each set has a "setName" and a "questions" array. Inside "questions", each object must have "questionText", "marks", and "solutionText".`;
+
+export async function generatePracticeSets(pdfFiles, questionsPerSet, setLimit, customPrompt, apiKey) {
+  if (!apiKey) {
+    throw new Error("Gemini API Key is missing. Please configure it in Settings.");
+  }
+  if (!pdfFiles || pdfFiles.length === 0) {
+    throw new Error("No PDF files provided to analyze.");
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+
+  // Map each PDF file to an inlineData part
+  const pdfParts = pdfFiles.map(file => {
+    // Remove header if present
+    const base64Clean = file.base64.replace(/^data:application\/pdf;base64,/, "");
+    return {
+      inlineData: {
+        mimeType: "application/pdf",
+        data: base64Clean
+      }
+    };
+  });
+
+  const promptText = `
+Please analyze the attached PDF documents and generate:
+- Number of Practice Sets: ${setLimit}
+- Number of Questions per Set: ${questionsPerSet}
+${customPrompt ? `- Additional Guidelines / Topics: ${customPrompt}` : ""}
+
+Make sure the questions are distinct across the sets where possible. If the source material is limited, you can reuse or slightly vary some questions. Provide step-by-step LaTeX explanations for every question.
+`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: PRACTICE_SYSTEM_PROMPT },
+          ...pdfParts,
+          { text: promptText }
+        ]
+      }
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "OBJECT",
+        properties: {
+          practiceSets: {
+            type: "ARRAY",
+            description: "List of generated practice sets.",
+            items: {
+              type: "OBJECT",
+              properties: {
+                setName: {
+                  type: "STRING",
+                  description: "Name of the practice set (e.g. 'Practice Set 1')."
+                },
+                questions: {
+                  type: "ARRAY",
+                  description: "List of questions in this practice set.",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      questionText: {
+                        type: "STRING",
+                        description: "The math question text. Use LaTeX delimiters $...$ for inline and $$...$$ for blocks."
+                      },
+                      marks: {
+                        type: "INTEGER",
+                        description: "Suggested marks (e.g. 2, 3, 5)."
+                      },
+                      solutionText: {
+                        type: "STRING",
+                        description: "Detailed step-by-step mathematical solution using LaTeX delimiters."
+                      }
+                    },
+                    required: ["questionText", "marks", "solutionText"]
+                  }
+                }
+              },
+              required: ["setName", "questions"]
+            }
+          }
+        },
+        required: ["practiceSets"]
+      }
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMsg = errorData.error?.message || `HTTP error ${response.status}`;
+      throw new Error(`Gemini API Error: ${errorMsg}`);
+    }
+
+    const data = await response.json();
+    const responseText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!responseText) {
+      throw new Error("No response received from Gemini model.");
+    }
+
+    const parsedData = JSON.parse(responseText);
+    return parsedData.practiceSets;
+  } catch (error) {
+    console.error("Practice generator failed:", error);
+    throw error;
+  }
+}
+
+

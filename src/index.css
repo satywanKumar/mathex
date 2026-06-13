@@ -36,6 +36,7 @@
   }
 
   .paper-preview {
+    border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
     margin: 0 !important;
@@ -63,3 +64,30 @@
 .transition-all-300 {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Shake animation for invalid PIN attempts */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-6px); }
+  20%, 40%, 60%, 80% { transform: translateX(6px); }
+}
+
+.animate-shake {
+  animation: shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+}
+
+/* Glow bubbles for login page */
+@keyframes pulse-slow {
+  0%, 100% { transform: scale(1) translate(0px, 0px); opacity: 0.25; }
+  33% { transform: scale(1.15) translate(20px, -30px); opacity: 0.4; }
+  66% { transform: scale(0.9) translate(-15px, 15px); opacity: 0.15; }
+}
+
+.animate-pulse-slow-1 {
+  animation: pulse-slow 15s infinite ease-in-out;
+}
+
+.animate-pulse-slow-2 {
+  animation: pulse-slow 20s infinite ease-in-out reverse;
+}
+

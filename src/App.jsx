@@ -17,9 +17,14 @@ import {
   Save,
   X,
   FileCode,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Key
 } from 'lucide-react';
-import { convertImageToQuestion, generateSolutionsForPaper } from './services/gemini';
+import { convertImageToQuestion, generateSolutionsForPaper, generatePracticeSets } from './services/gemini';
 import katex from 'katex';
 import mermaid from 'mermaid';
 
@@ -167,6 +172,32 @@ function MermaidRenderer({ code, id }) {
 }
 
 export default function App() {
+  // Authentication states
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return sessionStorage.getItem('mq_auth') === 'true';
+  });
+  const [pinInput, setPinInput] = useState('');
+  const [showPin, setShowPin] = useState(false);
+  const [pinError, setPinError] = useState(false);
+
+  // Tab navigation states
+  const [activeTab, setActiveTab] = useState('builder'); // 'builder' | 'generator'
+
+  // AI Practice Generator states
+  const [uploadedPDFs, setUploadedPDFs] = useState([]);
+  const [questionsPerSet, setQuestionsPerSet] = useState(10);
+  const [numberOfSets, setNumberOfSets] = useState(3);
+  const [customInstructions, setCustomInstructions] = useState('');
+  const [practiceSets, setPracticeSets] = useState(() => {
+    const saved = localStorage.getItem('paper_practice_sets');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [isGeneratingSets, setIsGeneratingSets] = useState(false);
+  const [expandedSolutions, setExpandedSolutions] = useState({});
+
+  const [coachingName, setCoachingName] = useState(() => localStorage.getItem('coaching_name') || 'SBS COACHING CENTRE');
+  const [practiceExtraInfo, setPracticeExtraInfo] = useState(() => localStorage.getItem('practice_extra_info') || 'Mathematics Practice Worksheet');
+
   // State for Settings
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [showSettings, setShowSettings] = useState(!localStorage.getItem('gemini_api_key'));
@@ -235,6 +266,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('paper_solutions', JSON.stringify(solutions));
   }, [solutions]);
+
+  useEffect(() => {
+    localStorage.setItem('paper_practice_sets', JSON.stringify(practiceSets));
+  }, [practiceSets]);
+
+  useEffect(() => {
+    localStorage.setItem('coaching_name', coachingName);
+  }, [coachingName]);
+
+  useEffect(() => {
+    localStorage.setItem('practice_extra_info', practiceExtraInfo);
+  }, [practiceExtraInfo]);
 
   // Global listener for paste event
   useEffect(() => {
@@ -399,6 +442,21 @@ export default function App() {
     });
   };
 
+  // Unlock security workspace
+  const handleUnlock = (e) => {
+    if (e) e.preventDefault();
+    if (pinInput === 'satya@SBS') {
+      setIsAuthenticated(true);
+      sessionStorage.setItem('mq_auth', 'true');
+      setPinError(false);
+    } else {
+      setPinError(true);
+      setTimeout(() => {
+        setPinError(false);
+      }, 500);
+    }
+  };
+
   // Generate Solutions via Gemini API
   const generateSolutions = async () => {
     if (questions.length === 0) return;
@@ -459,6 +517,206 @@ export default function App() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  // PDF Practice Generator Helpers
+  const handlePDFUpload = (files) => {
+    setErrorMsg('');
+    const validPDFs = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf') || f.type === 'application/pdf');
+    if (validPDFs.length === 0) {
+      setErrorMsg('Please select valid PDF files.');
+      return;
+    }
+
+    validPDFs.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target.result;
+        setUploadedPDFs(prev => [
+          ...prev,
+          {
+            id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+            name: file.name,
+            size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
+            base64: base64
+          }
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const removePDF = (id) => {
+    setUploadedPDFs(uploadedPDFs.filter(f => f.id !== id));
+  };
+
+  const generatePractice = async () => {
+    if (uploadedPDFs.length === 0) {
+      setErrorMsg("Please upload at least one PDF file.");
+      return;
+    }
+    if (!apiKey) {
+      setErrorMsg("Please set your Gemini API Key in Settings first!");
+      setShowSettings(true);
+      return;
+    }
+    setIsGeneratingSets(true);
+    setErrorMsg('');
+    try {
+      const sets = await generatePracticeSets(
+        uploadedPDFs,
+        questionsPerSet,
+        numberOfSets,
+        customInstructions,
+        apiKey
+      );
+      setPracticeSets(sets);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg(err.message || "Failed to generate practice sets. Please try again.");
+    } finally {
+      setIsGeneratingSets(false);
+    }
+  };
+
+  const importQuestionToBuilder = (questionText, marks) => {
+    const newQuestion = {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+      questionText: questionText,
+      hasDiagram: false,
+      diagramType: 'none',
+      diagramCode: '',
+      marks: marks || 5,
+      isPageBreakAfter: false
+    };
+    setQuestions(prev => [...prev, newQuestion]);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+    setActiveTab('builder');
+  };
+
+  const importAllQuestionsFromSet = (set) => {
+    const newQuestions = set.questions.map((q, idx) => ({
+      id: (Date.now() + idx).toString() + Math.random().toString(36).substr(2, 5),
+      questionText: q.questionText,
+      hasDiagram: false,
+      diagramType: 'none',
+      diagramCode: '',
+      marks: q.marks || 5,
+      isPageBreakAfter: false
+    }));
+    setQuestions(prev => [...prev, ...newQuestions]);
+    setCopySuccess(true);
+    setTimeout(() => setCopySuccess(false), 2000);
+    setActiveTab('builder');
+  };
+
+  const renderLatexToHTMLString = (text) => {
+    if (!text) return '';
+    const parts = text.split(/(\$\$.*?\$\$|\$.*?\$)/gs);
+    return parts.map(part => {
+      if (part.startsWith('$$') && part.endsWith('$$')) {
+        const formula = part.slice(2, -2).trim();
+        try {
+          return katex.renderToString(formula, { displayMode: true, throwOnError: false });
+        } catch (e) {
+          return `<span style="color: red;">${part}</span>`;
+        }
+      } else if (part.startsWith('$') && part.endsWith('$')) {
+        const formula = part.slice(1, -1).trim();
+        try {
+          return katex.renderToString(formula, { displayMode: false, throwOnError: false });
+        } catch (e) {
+          return `<span style="color: red;">${part}</span>`;
+        }
+      }
+      return part.replace(/\n/g, '<br/>');
+    }).join('');
+  };
+
+  const printPracticeSet = (setIdx) => {
+    const set = practiceSets[setIdx];
+    if (!set) return;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      alert("Please allow popups to print practice sets.");
+      return;
+    }
+
+    const htmlContent = `
+      <!doctype html>
+      <html>
+        <head>
+          <title>${set.setName || 'Practice Set'}</title>
+          <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+          <style>
+            @page { size: A4; margin: 1in; }
+            body { font-family: 'Times New Roman', Times, serif; color: #000; line-height: 1.6; padding: 20px; }
+            .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 25px; }
+            .coaching-name { font-size: 18pt; font-weight: bold; text-transform: uppercase; }
+            .set-name { font-size: 13pt; font-weight: bold; margin-top: 5px; text-transform: uppercase; letter-spacing: 1px; }
+            .extra-info { font-size: 11pt; font-style: italic; margin-top: 5px; color: #444; }
+            .questions { margin-top: 15px; }
+            .question-row { display: flex; align-items: start; margin-bottom: 20px; page-break-inside: avoid; }
+            .q-num { width: 6%; font-weight: bold; font-size: 11pt; }
+            .q-text { width: 84%; font-size: 11pt; }
+            .q-marks { width: 10%; text-align: right; font-weight: bold; font-size: 11pt; }
+            .solutions-section { margin-top: 40px; border-top: 2px dashed #000; padding-top: 25px; page-break-before: always; }
+            .solutions-title { text-align: center; font-size: 14pt; font-weight: bold; margin-bottom: 20px; text-transform: uppercase; }
+            .solution-row { margin-bottom: 22px; page-break-inside: avoid; font-size: 11pt; }
+            .sol-label { font-weight: bold; font-style: italic; margin-bottom: 4px; display: block; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="coaching-name">${coachingName}</div>
+            <div class="set-name">${set.setName || ('PRACTICE SET ' + (setIdx + 1))}</div>
+            <div class="extra-info">${practiceExtraInfo}</div>
+          </div>
+          
+          <div class="questions">
+            ${set.questions.map((q, idx) => `
+              <div class="question-row">
+                <div class="q-num">Q${idx + 1}.</div>
+                <div class="q-text">${renderLatexToHTMLString(q.questionText)}</div>
+                <div class="q-marks">[${q.marks || 5} Marks]</div>
+              </div>
+            `).join('')}
+          </div>
+
+          <div class="solutions-section">
+            <div class="solutions-title">ANSWER KEY & SOLUTIONS</div>
+            ${set.questions.map((q, idx) => `
+              <div class="solution-row">
+                <div class="sol-label">Q${idx + 1}. Solution:</div>
+                <div>${renderLatexToHTMLString(q.solutionText)}</div>
+              </div>
+            `).join('')}
+          </div>
+
+          <script>
+            window.onload = function() {
+              window.focus();
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `;
+    
+    printWindow.document.open();
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
+  const toggleSolutionVisibility = (setIdx, qIdx) => {
+    const key = `${setIdx}-${qIdx}`;
+    setExpandedSolutions(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   };
 
 
@@ -755,6 +1013,72 @@ ${paperMeta.instructions.map(inst => `    \\item ${inst}`).join('\n')}
     URL.revokeObjectURL(url);
   };
 
+  if (!isAuthenticated) {
+    return (
+      <div className="relative min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 font-sans overflow-hidden select-none">
+        
+        {/* Glow bubble background */}
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/10 blur-[120px] animate-pulse-slow-1 pointer-events-none" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-purple-500/10 blur-[120px] animate-pulse-slow-2 pointer-events-none" />
+
+        {/* Lock Screen Card */}
+        <div className={`relative z-10 w-full max-w-md mx-4 p-8 rounded-3xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl shadow-2xl space-y-6 text-center transition-all-300 ${pinError ? 'animate-shake border-red-500/30' : ''}`}>
+          
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-500 text-white shadow-xl flex items-center justify-center">
+            {pinError ? <Lock className="animate-bounce" size={28} /> : <Lock size={28} />}
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-2xl font-bold bg-gradient-to-r from-slate-100 to-slate-300 bg-clip-text text-transparent">
+              MathQuest Secure Portal
+            </h2>
+            <p className="text-xs text-slate-400">
+              Enter Security PIN to unlock the Question Paper Builder
+            </p>
+          </div>
+
+          <form onSubmit={handleUnlock} className="space-y-4">
+            <div className="relative">
+              <input
+                type={showPin ? 'text' : 'password'}
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+                placeholder="Enter security PIN..."
+                autoFocus
+                className={`w-full bg-slate-950 border rounded-xl pl-10 pr-10 py-2.5 text-sm text-slate-100 focus:outline-none transition-colors ${pinError ? 'border-red-500/40 focus:border-red-500/60' : 'border-slate-800 focus:border-indigo-500/60'}`}
+              />
+              <Key size={16} className="absolute left-3.5 top-3.5 text-slate-500" />
+              <button
+                type="button"
+                onClick={() => setShowPin(!showPin)}
+                className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 transition-colors"
+              >
+                {showPin ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+
+            {pinError && (
+              <p className="text-xs font-semibold text-red-400 text-left pl-1">
+                Invalid security PIN. Please try again.
+              </p>
+            )}
+
+            <button
+              type="submit"
+              className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-sm rounded-xl py-2.5 shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <span>Unlock Builder</span>
+            </button>
+          </form>
+
+          <div className="text-[10px] text-slate-650">
+            Authorized access only. System activity is logged.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col font-sans bg-slate-950 text-slate-100 selection:bg-indigo-500/30">
       
@@ -770,6 +1094,30 @@ ${paperMeta.instructions.map(inst => `    \\item ${inst}`).join('\n')}
             </h1>
             <p className="text-xs text-slate-400 font-medium">Smart Question Paper Builder</p>
           </div>
+        </div>
+
+        {/* Tab Switcher */}
+        <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-xl">
+          <button
+            onClick={() => setActiveTab('builder')}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'builder' 
+                ? 'bg-indigo-600 text-white' 
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+            }`}
+          >
+            Exam Builder
+          </button>
+          <button
+            onClick={() => setActiveTab('generator')}
+            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === 'generator' 
+                ? 'bg-indigo-600 text-white' 
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+            }`}
+          >
+            AI Practice Generator
+          </button>
         </div>
 
         {/* Global Action Header Items */}
@@ -797,8 +1145,9 @@ ${paperMeta.instructions.map(inst => `    \\item ${inst}`).join('\n')}
         </div>
       </header>
 
-      {/* Main split-screen Layout */}
-      <main className="flex-1 max-w-[1700px] w-full mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      {/* Main split-screen Layout based on activeTab */}
+      {activeTab === 'builder' ? (
+        <main className="flex-1 max-w-[1700px] w-full mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
         {/* LEFT COLUMN: Input Control & Conversion Panel */}
         <section className="lg:col-span-5 space-y-6 no-print w-full">
@@ -1482,7 +1831,317 @@ ${paperMeta.instructions.map(inst => `    \\item ${inst}`).join('\n')}
         </section>
         
       </main>
+      ) : (
+        <main className="flex-1 max-w-[1500px] w-full mx-auto px-4 py-6 space-y-8 no-print">
+          
+          {/* Main practice generator workspace */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            
+            {/* Left side: Upload card & configs */}
+            <div className="lg:col-span-5 space-y-6">
+              
+              {/* PDF Upload Card */}
+              <div className="p-5 rounded-2xl bg-slate-900/40 border border-slate-800 shadow-xl space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+                    <Upload size={16} className="text-indigo-400" />
+                    Upload Math Reference PDFs
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Upload PDF documents (e.g. textbook chapters, syllabus guides, or class worksheets). Gemini will read and generate practice sets directly based on them.
+                </p>
 
+                {/* Upload drag drop zone */}
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                      handlePDFUpload(e.dataTransfer.files);
+                    }
+                  }}
+                  onClick={() => document.getElementById('pdf-file-input').click()}
+                  className="border-2 border-dashed border-slate-800 bg-slate-950/40 hover:bg-slate-950/80 hover:border-slate-750 transition-all rounded-xl p-6 text-center cursor-pointer space-y-2 select-none"
+                >
+                  <input
+                    id="pdf-file-input"
+                    type="file"
+                    multiple
+                    accept="application/pdf"
+                    onChange={(e) => handlePDFUpload(e.target.files)}
+                    className="hidden"
+                  />
+                  <FileText size={24} className="mx-auto text-slate-500 animate-pulse" />
+                  <div className="text-xs font-semibold text-slate-300">
+                    Click or drag & drop PDF files here
+                  </div>
+                  <div className="text-[10px] text-slate-500">
+                    Supports uploading multiple files
+                  </div>
+                </div>
+
+                {/* List of uploaded PDFs */}
+                {uploadedPDFs.length > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide">
+                      Uploaded Documents ({uploadedPDFs.length})
+                    </div>
+                    <div className="max-h-[180px] overflow-y-auto space-y-1.5 pr-1">
+                      {uploadedPDFs.map((pdf) => (
+                        <div key={pdf.id} className="flex items-center justify-between p-2.5 rounded-lg border border-slate-800 bg-slate-950/80 text-xs">
+                          <div className="flex items-center gap-2 truncate pr-2">
+                            <FileText size={14} className="text-indigo-400 shrink-0" />
+                            <span className="text-slate-200 truncate font-medium" title={pdf.name}>
+                              {pdf.name}
+                            </span>
+                            <span className="text-[10px] text-slate-500 shrink-0">
+                              ({pdf.size})
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => removePDF(pdf.id)}
+                            className="text-slate-500 hover:text-red-400 p-1 hover:bg-slate-900 rounded cursor-pointer transition-colors"
+                            title="Remove File"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Set Configuration Card */}
+              <div className="p-5 rounded-2xl bg-slate-900/40 border border-slate-800 shadow-xl space-y-4">
+                <h3 className="font-semibold text-slate-200 flex items-center gap-2 text-sm">
+                  <Settings size={16} className="text-indigo-400" />
+                  Practice Set Customization
+                </h3>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-350 block mb-1">
+                      Coaching Name / Institution Title
+                    </label>
+                    <input
+                      type="text"
+                      value={coachingName}
+                      onChange={(e) => setCoachingName(e.target.value)}
+                      placeholder="e.g. SBS COACHING CENTRE"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="text-xs font-semibold text-slate-350 block mb-1">
+                      Practice Set Extra Info / Subheader
+                    </label>
+                    <input
+                      type="text"
+                      value={practiceExtraInfo}
+                      onChange={(e) => setPracticeExtraInfo(e.target.value)}
+                      placeholder="e.g. Mathematics Practice Worksheet"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-400 block mb-1">
+                      Questions per Set
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={questionsPerSet}
+                      onChange={(e) => setQuestionsPerSet(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/55"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-400 block mb-1">
+                      Number of Sets
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={numberOfSets}
+                      onChange={(e) => setNumberOfSets(Number(e.target.value))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500/55"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-400 block mb-1">
+                    Guideline Prompts / Specific Topics (Optional)
+                  </label>
+                  <textarea
+                    value={customInstructions}
+                    onChange={(e) => setCustomInstructions(e.target.value)}
+                    rows={3}
+                    placeholder="e.g. Focus on Chapter 3 limits, include multiple-choice questions, make intermediate difficulty..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500/50 transition-colors placeholder:text-slate-600"
+                  />
+                </div>
+
+                <button
+                  onClick={generatePractice}
+                  disabled={isGeneratingSets || uploadedPDFs.length === 0}
+                  className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold rounded-xl py-3 shadow-lg shadow-indigo-600/20 flex items-center justify-center gap-2 active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {isGeneratingSets ? (
+                    <>
+                      <div className="w-4 h-4 rounded-full border border-white/20 border-t-white animate-spin" />
+                      <span>AI Reading PDF & Generating Practice Sets...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={16} />
+                      <span>Generate Practice Sets</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+            </div>
+
+            {/* Right side: Generated Sets preview */}
+            <div className="lg:col-span-7 space-y-6">
+              
+              {isGeneratingSets && (
+                <div className="p-12 text-center border border-indigo-500/10 bg-indigo-500/5 rounded-2xl space-y-4">
+                  <div className="relative flex items-center justify-center">
+                    <div className="w-12 h-12 rounded-full border-2 border-indigo-500/20 border-t-indigo-500 animate-spin" />
+                    <Sparkles size={20} className="absolute text-indigo-400 animate-pulse" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-semibold text-slate-200">Generating Practice Sheets</p>
+                    <p className="text-xs text-slate-400">Gemini is extracting formulas, math context, and formulating distinct sets of questions with step-by-step keys...</p>
+                  </div>
+                </div>
+              )}
+
+              {!isGeneratingSets && practiceSets.length === 0 && (
+                <div className="p-20 text-center border border-slate-800 bg-slate-900/10 rounded-2xl flex flex-col items-center justify-center space-y-3">
+                  <FileText size={42} className="text-slate-700 stroke-[1.5]" />
+                  <p className="font-semibold text-slate-500 text-sm">No Practice Sets Generated Yet</p>
+                  <p className="text-xs text-slate-400 max-w-sm leading-relaxed mx-auto">
+                    Upload learning reference PDFs on the left, set your desired questions per set and counts, and click generate to launch the AI generator.
+                  </p>
+                </div>
+              )}
+
+              {!isGeneratingSets && practiceSets.length > 0 && (
+                <div className="space-y-6">
+                  {practiceSets.map((set, setIdx) => (
+                    <div key={setIdx} className="p-6 rounded-2xl border border-slate-800 bg-slate-900/30 space-y-5 shadow-lg relative overflow-hidden">
+                      <div className="absolute top-0 left-0 w-full h-[3px] bg-gradient-to-r from-indigo-500 to-purple-500" />
+                      
+                      {/* Paper-Style Header for Practice Set */}
+                      <div className="border border-slate-800 bg-slate-950/80 p-4 rounded-xl text-center space-y-1 select-all font-serif">
+                        <div className="font-bold text-center text-sm md:text-base tracking-wide uppercase font-serif text-slate-100">
+                          {coachingName}
+                        </div>
+                        <div className="font-bold text-center text-xs md:text-sm uppercase font-serif text-indigo-400">
+                          {set.setName || `PRACTICE SET ${setIdx + 1}`}
+                        </div>
+                        <div className="text-center text-[10px] md:text-xs font-medium italic font-serif text-slate-400">
+                          {practiceExtraInfo}
+                        </div>
+                      </div>
+
+                      {/* Set Header Toolbar */}
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-800">
+                        <div>
+                          <p className="text-[10px] text-slate-500 font-medium">
+                            Contains {set.questions?.length || 0} distinct practice questions with matching keys
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => printPracticeSet(setIdx)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-850 bg-slate-950 hover:bg-slate-900 text-slate-350 hover:text-white transition-colors text-xs font-semibold cursor-pointer"
+                          >
+                            <Printer size={13} className="text-indigo-400" />
+                            <span>Print Set</span>
+                          </button>
+                          <button
+                            onClick={() => importAllQuestionsFromSet(set)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-500/20 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 transition-colors text-xs font-semibold cursor-pointer"
+                          >
+                            <Plus size={13} />
+                            <span>Import Set to Builder</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Question list render */}
+                      <div className="space-y-5">
+                        {set.questions?.map((q, qIdx) => {
+                          const isSolutionExpanded = !!expandedSolutions[`${setIdx}-${qIdx}`];
+                          return (
+                            <div key={qIdx} className="bg-slate-950/40 rounded-xl p-4 border border-slate-850 space-y-3">
+                              
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="text-xs md:text-sm leading-relaxed text-slate-200 flex items-start gap-2 pr-2">
+                                  <span className="font-bold text-indigo-400 select-none">Q{qIdx + 1}.</span>
+                                  <div>
+                                    <LatexRenderer text={q.questionText} />
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0 no-print">
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 whitespace-nowrap">
+                                    {q.marks || 5} Marks
+                                  </span>
+                                  <button
+                                    onClick={() => importQuestionToBuilder(q.questionText, q.marks)}
+                                    className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-slate-900 rounded cursor-pointer transition-colors"
+                                    title="Import just this question"
+                                  >
+                                    <Plus size={13} />
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Solution expandable box */}
+                              <div className="pt-2 border-t border-slate-800">
+                                <button
+                                  onClick={() => toggleSolutionVisibility(setIdx, qIdx)}
+                                  className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 hover:text-slate-200 transition-colors cursor-pointer select-none"
+                                >
+                                  <span>{isSolutionExpanded ? 'Hide Solution Key' : 'Reveal Solution Key'}</span>
+                                </button>
+
+                                {isSolutionExpanded && (
+                                  <div className="mt-3 p-3 rounded-lg bg-indigo-500/5 border border-indigo-500/10 text-xs text-slate-350 leading-relaxed font-sans animate-fade-in whitespace-pre-wrap">
+                                    <div className="font-bold text-indigo-400 italic mb-1.5">Step-by-step Solution:</div>
+                                    <LatexRenderer text={q.solutionText} />
+                                  </div>
+                                )}
+                              </div>
+
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              )}
+
+            </div>
+
+          </div>
+        </main>
+      )}
+      
       {/* Mini Footer details */}
       <footer className="w-full text-center py-6 text-slate-600 border-t border-slate-900/60 no-print text-[11px] font-medium bg-slate-950/40">
         MathQuest &copy; 2026. Made with Tailwind v4, KaTeX, Mermaid and Gemini OCR logic.
